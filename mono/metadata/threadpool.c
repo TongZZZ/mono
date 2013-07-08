@@ -814,7 +814,13 @@ monitor_thread (gpointer unused)
 }
 
 void
-mono_thread_pool_init ()
+mono_thread_pool_init_tls (void)
+{
+	mono_wsq_init ();
+}
+
+void
+mono_thread_pool_init (void)
 {
 	gint threads_per_cpu = 1;
 	gint thread_count;
@@ -851,7 +857,6 @@ mono_thread_pool_init ()
 
 	InitializeCriticalSection (&wsqs_lock);
 	wsqs = g_ptr_array_sized_new (MAX (100 * cpu_count, thread_count));
-	mono_wsq_init ();
 
 #ifndef DISABLE_PERFCOUNTERS
 	async_tp.pc_nitems = init_perf_counter ("Mono Threadpool", "Work Items Added");
@@ -1095,16 +1100,22 @@ static void
 threadpool_clear_queue (ThreadPool *tp, MonoDomain *domain)
 {
 	MonoObject *obj;
-	MonoMList *other;
+	MonoMList *other = NULL;
+	MonoCQ *queue = tp->queue;
 
-	other = NULL;
-	while (mono_cq_dequeue (tp->queue, &obj)) {
+	if (!queue)
+		return;
+
+	while (mono_cq_dequeue (queue, &obj)) {
 		if (obj == NULL)
 			continue;
 		if (obj->vtable->domain != domain)
 			other = mono_mlist_prepend (other, obj);
 		threadpool_jobs_dec (obj);
 	}
+
+	if (mono_runtime_is_shutting_down ())
+		return;
 
 	while (other) {
 		threadpool_append_job (tp, (MonoObject *) mono_mlist_get_data (other));

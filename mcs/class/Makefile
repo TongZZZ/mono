@@ -152,6 +152,9 @@ mobile_dirs := \
 	System.IO.Compression.FileSystem \
 	System.ComponentModel.DataAnnotations \
 	System.ComponentModel.Composition.4.5 \
+	System.Net \
+	System.Windows \
+	System.Xml.Serialization \
 	Facades
 
 monodroid_dirs := \
@@ -231,6 +234,7 @@ net_4_5_dirs := \
 	System.Threading.Tasks.Dataflow \
 	System.ComponentModel.Composition.4.5 \
 	System.Net.Http	\
+	System.Net.Http.WebRequest \
 	System.Web.Razor \
 	System.Web.WebPages.Deployment \
 	System.Web.WebPages \
@@ -245,6 +249,8 @@ net_4_5_dirs := \
 	Mono.CodeContracts \
 	System.IO.Compression \
 	System.IO.Compression.FileSystem \
+	System.Windows \
+	System.Xml.Serialization \
 	Facades
 	
 net_2_0_SUBDIRS := $(common_dirs) $(net_2_0_dirs) $(net_2_0_only_dirs) aot-compiler

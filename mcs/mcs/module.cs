@@ -131,6 +131,9 @@ namespace Mono.CSharp
 		PlayScript.PredefinedTypes playscript_types;
 		PlayScript.PredefinedMembers playscript_members;
 
+		public Binary.PredefinedOperator[] OperatorsBinaryEqualityLifted;
+		public Binary.PredefinedOperator[] OperatorsBinaryLifted;
+
 		static readonly string[] attribute_targets = new string[] { "assembly", "module" };
 
 		public ModuleContainer (CompilerContext context)
@@ -550,14 +553,41 @@ namespace Mono.CSharp
 			return "<module>";
 		}
 
+		public Binary.PredefinedOperator[] GetPredefinedEnumAritmeticOperators (TypeSpec enumType, bool nullable)
+		{
+			TypeSpec underlying;
+			Binary.Operator mask = 0;
+
+			if (nullable) {
+				underlying = Nullable.NullableInfo.GetEnumUnderlyingType (this, enumType);
+				mask = Binary.Operator.NullableMask;
+			} else {
+				underlying = EnumSpec.GetUnderlyingType (enumType);
+			}
+
+			var operators = new[] {
+				new Binary.PredefinedOperator (enumType, underlying,
+					mask | Binary.Operator.AdditionMask | Binary.Operator.SubtractionMask | Binary.Operator.DecomposedMask, enumType),
+				new Binary.PredefinedOperator (underlying, enumType,
+					mask | Binary.Operator.AdditionMask | Binary.Operator.SubtractionMask | Binary.Operator.DecomposedMask, enumType),
+				new Binary.PredefinedOperator (enumType, mask | Binary.Operator.SubtractionMask, underlying)
+			};
+
+			return operators;
+		}
+
 		public void InitializePredefinedTypes ()
 		{
 			predefined_attributes = new PredefinedAttributes (this);
 			predefined_types = new PredefinedTypes (this);
 			predefined_members = new PredefinedMembers (this);
+
 			playscript_attributes = new PlayScript.PredefinedAttributes (this);
 			playscript_types = new PlayScript.PredefinedTypes (this);
 			playscript_members = new PlayScript.PredefinedMembers (this);
+
+			OperatorsBinaryEqualityLifted = Binary.CreateEqualityLiftedOperatorsTable (this);
+			OperatorsBinaryLifted = Binary.CreateStandardLiftedOperatorsTable (this);
 		}
 
 		public override bool IsClsComplianceRequired ()

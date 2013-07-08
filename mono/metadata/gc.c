@@ -1456,7 +1456,10 @@ reference_queue_clear_for_domain (MonoDomain *domain)
 		RefQueueEntry **iter = &queue->queue;
 		RefQueueEntry *entry;
 		while ((entry = *iter)) {
+<<<<<<< HEAD
 			MonoObject *obj;
+=======
+>>>>>>> origin/master
 			if (entry->domain == domain) {
 #ifdef HAVE_SGEN_GC
 				mono_gc_weak_link_remove (&entry->dis_link, TRUE);

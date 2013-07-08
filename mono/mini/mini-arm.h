@@ -101,15 +101,15 @@
  * reproduceable results for benchmarks */
 #define MONO_ARCH_CODE_ALIGNMENT 32
 
-
 /* Return value marshalling for calls between gsharedvt and normal code */
 typedef enum {
 	GSHAREDVT_RET_NONE = 0,
-	GSHAREDVT_RET_IREGS = 1,
-	GSHAREDVT_RET_I1 = 5,
-	GSHAREDVT_RET_U1 = 6,
-	GSHAREDVT_RET_I2 = 7,
-	GSHAREDVT_RET_U2 = 8
+	GSHAREDVT_RET_IREG = 1,
+	GSHAREDVT_RET_IREGS = 2,
+	GSHAREDVT_RET_I1 = 3,
+	GSHAREDVT_RET_U1 = 4,
+	GSHAREDVT_RET_I2 = 5,
+	GSHAREDVT_RET_U2 = 6
 } GSharedVtRetMarshal;
 
 typedef struct {
@@ -141,7 +141,7 @@ void
 mono_arm_throw_exception_by_token (guint32 type_token, mgreg_t pc, mgreg_t sp, mgreg_t *int_regs, gdouble *fp_regs);
 
 gpointer
-mono_arm_start_gsharedvt_call (GSharedVtCallInfo *info, gpointer *caller, gpointer *callee, gpointer *caller_regs, gpointer *callee_regs, gpointer mrgctx_reg) MONO_INTERNAL;
+mono_arm_start_gsharedvt_call (GSharedVtCallInfo *info, gpointer *caller, gpointer *callee, gpointer mrgctx_reg) MONO_INTERNAL;
 
 typedef enum {
 	MONO_ARM_FPU_NONE = 0,

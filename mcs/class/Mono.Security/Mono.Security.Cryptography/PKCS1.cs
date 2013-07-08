@@ -426,7 +426,11 @@ namespace Mono.Security.Cryptography {
 			return mask;
 		}
 
+<<<<<<< HEAD
 		static internal string HashNameFromOid (string oid)
+=======
+		static internal string HashNameFromOid (string oid, bool throwOnError = true)
+>>>>>>> origin/master
 		{
 			switch (oid) {
 			case "1.2.840.113549.1.1.2":	// MD2 with RSA encryption 
@@ -448,7 +452,13 @@ namespace Mono.Security.Cryptography {
 			case "1.3.36.3.3.1.2":
 				return "RIPEMD160";
 			default:
+<<<<<<< HEAD
 				throw new CryptographicException ("Unsupported hash algorithm: " + oid);
+=======
+				if (throwOnError)
+					throw new CryptographicException ("Unsupported hash algorithm: " + oid);
+				return null;
+>>>>>>> origin/master
 			}
 		}
 		

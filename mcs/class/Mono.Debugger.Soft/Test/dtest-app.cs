@@ -223,6 +223,12 @@ public class Tests : TestsBase
 		}
 	}
 
+	public static void wait_one ()
+	{
+		ManualResetEvent evt = new ManualResetEvent (false);
+		evt.WaitOne ();
+	}
+
 	public static int Main (String[] args) {
 		tls_i = 42;
 
@@ -239,6 +245,10 @@ public class Tests : TestsBase
 		}
 		if (args.Length >0 && args [0] == "unhandled-exception-user") {
 			unhandled_exception_user ();
+			return 0;
+		}
+		if (args.Length >0 && args [0] == "wait-one") {
+			wait_one ();
 			return 0;
 		}
 		breakpoints ();
@@ -523,6 +533,7 @@ public class Tests : TestsBase
 		locals2<string> (null, 5, "ABC", ref s);
 		locals3 ();
 		locals6 ();
+		locals7<int> (22);
 	}
 
 	[MethodImplAttribute (MethodImplOptions.NoInlining)]
@@ -636,6 +647,12 @@ public class Tests : TestsBase
 
 	[MethodImplAttribute (MethodImplOptions.NoInlining)]
 	public static void locals6_6 (int arg) {
+	}
+
+	[MethodImplAttribute (MethodImplOptions.NoInlining)]
+	public static void locals7<T> (T arg) {
+		T t = arg;
+		T t2 = t;
 	}
 
 	[MethodImplAttribute (MethodImplOptions.NoInlining)]
@@ -1150,6 +1167,10 @@ public class Tests : TestsBase
 	public static void gc_suspend () {
 		set_gc_suspend_field ();
 		gc_suspend_1 ();
+	}
+
+	[MethodImplAttribute (MethodImplOptions.NoInlining)]
+	public static void generic_method<T> () where T : class {
 	}
 }
 

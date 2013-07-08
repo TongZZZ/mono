@@ -388,7 +388,8 @@ BASE_TEST_CS_SRC=		\
 	bug-6148.cs	\
 	assembly_append_ordering.cs	\
 	bug-10127.cs	\
-	allow-synchronous-major.cs
+	allow-synchronous-major.cs	\
+	unload-appdomain-on-shutdown.cs
 
 TEST_CS_SRC_DIST=	\
 	$(BASE_TEST_CS_SRC)	\
@@ -546,15 +547,11 @@ DISABLED_TESTS_WRENCH=	\
 	$(PLATFORM_DISABLED_TESTS_WRENCH)	\
 	main-returns-background-resetabort.exe \
 	main-returns-background-abort-resetabort.exe	\
-	main-returns-background.exe	\
 	thread6.exe	\
 	assemblyresolve_event3.exe \
 	delegate2.exe	\
-	finally_guard.exe  	\
-	finalizer-abort.exe	\
-	finalizer-exit.exe	\
-	finalizer-thread.exe \
-	appdomain-async-invoke.exe
+	finally_guard.exe \
+	gc-altstack.exe
 
 AOT_DISABLED_TESTS=constraints-load.exe
 
@@ -879,7 +876,7 @@ test-type-load: TestDriver.dll
 	@$(RUNTIME) load-exceptions.exe > load-exceptions.exe.stdout 2> load-exceptions.exe.stderr
 
 
-EXTRA_DIST += sgen-bridge.cs sgen-descriptors.cs sgen-gshared-vtype.cs sgen-bridge-major-fragmentation.cs sgen-domain-unload.cs sgen-weakref-stress.cs sgen-cementing-stress.cs sgen-case-23400.cs 	finalizer-wait.cs critical-finalizers.cs
+EXTRA_DIST += sgen-bridge.cs sgen-descriptors.cs sgen-gshared-vtype.cs sgen-bridge-major-fragmentation.cs sgen-domain-unload.cs sgen-weakref-stress.cs sgen-cementing-stress.cs sgen-case-23400.cs 	finalizer-wait.cs critical-finalizers.cs sgen-domain-unload-2.cs sgen-suspend.cs
 
 
 #those are actually configurations, eg plain_sgen-descriptors.exe

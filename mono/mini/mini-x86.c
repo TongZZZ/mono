@@ -195,6 +195,8 @@ typedef enum {
 	ArgValuetypeInReg,
 	ArgOnFloatFpStack,
 	ArgOnDoubleFpStack,
+	/* gsharedvt argument passed by addr */
+	ArgGSharedVt,
 	ArgNone
 } ArgStorage;
 
@@ -244,6 +246,7 @@ add_general (guint32 *gr, guint32 *stack_size, ArgInfo *ainfo)
 
     if (*gr >= PARAM_REGS) {
 		ainfo->storage = ArgOnStack;
+		ainfo->nslots = 1;
 		(*stack_size) += sizeof (gpointer);
     }
     else {
@@ -405,6 +408,11 @@ get_call_info_internal (MonoGenericSharingContext *gsctx, CallInfo *cinfo, MonoM
 				cinfo->ret.reg = X86_EAX;
 				break;
 			}
+			if (mini_is_gsharedvt_type_gsctx (gsctx, ret_type)) {
+				cinfo->ret.storage = ArgOnStack;
+				cinfo->vtype_retaddr = TRUE;
+				break;
+			}
 			/* Fall through */
 		case MONO_TYPE_VALUETYPE:
 		case MONO_TYPE_TYPEDBYREF: {
@@ -417,6 +425,12 @@ get_call_info_internal (MonoGenericSharingContext *gsctx, CallInfo *cinfo, MonoM
 			}
 			break;
 		}
+		case MONO_TYPE_VAR:
+		case MONO_TYPE_MVAR:
+			g_assert (mini_is_gsharedvt_type_gsctx (gsctx, ret_type));
+			cinfo->ret.storage = ArgOnStack;
+			cinfo->vtype_retaddr = TRUE;
+			break;
 		case MONO_TYPE_VOID:
 			cinfo->ret.storage = ArgNone;
 			break;
@@ -513,6 +527,13 @@ get_call_info_internal (MonoGenericSharingContext *gsctx, CallInfo *cinfo, MonoM
 				add_general (&gr, &stack_size, ainfo);
 				break;
 			}
+			if (mini_is_gsharedvt_type_gsctx (gsctx, ptype)) {
+				/* gsharedvt arguments are passed by ref */
+				add_general (&gr, &stack_size, ainfo);
+				g_assert (ainfo->storage == ArgOnStack);
+				ainfo->storage = ArgGSharedVt;
+				break;
+			}
 			/* Fall through */
 		case MONO_TYPE_VALUETYPE:
 		case MONO_TYPE_TYPEDBYREF:
@@ -527,6 +548,14 @@ get_call_info_internal (MonoGenericSharingContext *gsctx, CallInfo *cinfo, MonoM
 			break;
 		case MONO_TYPE_R8:
 			add_float (&fr, &stack_size, ainfo, TRUE);
+			break;
+		case MONO_TYPE_VAR:
+		case MONO_TYPE_MVAR:
+			/* gsharedvt arguments are passed by ref */
+			g_assert (mini_is_gsharedvt_type_gsctx (gsctx, ptype));
+			add_general (&gr, &stack_size, ainfo);
+			g_assert (ainfo->storage == ArgOnStack);
+			ainfo->storage = ArgGSharedVt;
 			break;
 		default:
 			g_error ("unexpected type 0x%x", ptype->type);
@@ -1442,6 +1471,9 @@ mono_arch_get_llvm_call_info (MonoCompile *cfg, MonoMethodSignature *sig)
 				linfo->args [i].pair_storage [j] = arg_storage_to_llvm_arg_storage (cfg, ainfo->pair_storage [j]);
 			*/
 			break;
+		case ArgGSharedVt:
+			linfo->args [i].storage = LLVMArgGSharedVt;
+			break;
 		default:
 			cfg->exception_message = g_strdup ("ainfo->storage");
 			cfg->disable_llvm = TRUE;
@@ -1551,7 +1583,13 @@ mono_arch_emit_call (MonoCompile *cfg, MonoCallInst *call)
 
 		g_assert (in->dreg != -1);
 
-		if ((i >= sig->hasthis) && (MONO_TYPE_ISSTRUCT(t))) {
+		if (ainfo->storage == ArgGSharedVt) {
+			arg->opcode = OP_OUTARG_VT;
+			arg->sreg1 = in->dreg;
+			arg->klass = in->klass;
+			sp_offset += 4;
+			MONO_ADD_INS (cfg->cbb, arg);
+		} else if ((i >= sig->hasthis) && (MONO_TYPE_ISSTRUCT(t))) {
 			guint32 align;
 			guint32 size;
 
@@ -1679,7 +1717,12 @@ mono_arch_emit_outarg_vt (MonoCompile *cfg, MonoInst *ins, MonoInst *src)
 	MonoInst *arg;
 	int size = ins->backend.size;
 
-	if (size <= 4) {
+	if (cfg->gsharedvt && mini_is_gsharedvt_klass (cfg, ins->klass)) {
+		/* Pass by addr */
+		MONO_INST_NEW (cfg, arg, OP_X86_PUSH);
+		arg->sreg1 = src->dreg;
+		MONO_ADD_INS (cfg->cbb, arg);
+	} else if (size <= 4) {
 		MONO_INST_NEW (cfg, arg, OP_X86_PUSH_MEMBASE);
 		arg->sreg1 = src->dreg;
 
@@ -3235,7 +3278,7 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 			/* restore ESP/EBP */
 			x86_leave (code);
 			offset = code - cfg->native_code;
-			mono_add_patch_info (cfg, offset, MONO_PATCH_INFO_METHOD_JUMP, ins->inst_p0);
+			mono_add_patch_info (cfg, offset, MONO_PATCH_INFO_METHOD_JUMP, call->method);
 			x86_jump32 (code, 0);
 
 			ins->flags |= MONO_INST_GC_CALLSITE;
@@ -4156,6 +4199,21 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 		}
 		case OP_TLS_GET: {
 			code = mono_x86_emit_tls_get (code, ins->dreg, ins->inst_offset);
+			break;
+		}
+		case OP_TLS_GET_REG: {
+#ifdef __APPLE__
+			// FIXME: tls_gs_offset can change too, do these when calculating the tls offset
+			if (ins->dreg != ins->sreg1)
+				x86_mov_reg_reg (code, ins->dreg, ins->sreg1, sizeof (gpointer));
+			x86_shift_reg_imm (code, X86_SHL, ins->dreg, 2);
+			if (tls_gs_offset)
+				x86_alu_reg_imm (code, X86_ADD, ins->dreg, tls_gs_offset);
+			x86_prefix (code, X86_GS_PREFIX);
+			x86_mov_reg_membase (code, ins->dreg, ins->dreg, 0, sizeof (gpointer));
+#else
+			g_assert_not_reached ();
+#endif
 			break;
 		}
 		case OP_MEMORY_BARRIER: {

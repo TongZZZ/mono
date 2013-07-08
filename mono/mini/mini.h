@@ -133,7 +133,7 @@
 #endif
 
 /* Version number of the AOT file format */
-#define MONO_AOT_FILE_VERSION 89
+#define MONO_AOT_FILE_VERSION 90
 
 //TODO: This is x86/amd64 specific.
 #define mono_simd_shuffle_mask(a,b,c,d) ((a) | ((b) << 2) | ((c) << 4) | ((d) << 6))
@@ -310,6 +310,9 @@ typedef struct
 	GHashTable *arch_seq_points;
 	/* Maps a GSharedVtTrampInfo structure to a trampoline address */
 	GHashTable *gsharedvt_arg_tramp_hash;
+	/* memcpy/bzero methods specialized for small constant sizes */
+	gpointer *memcpy_addr [17];
+	gpointer *bzero_addr [17];
 } MonoJitDomainInfo;
 
 typedef struct {
@@ -720,7 +723,8 @@ typedef enum {
 	LLVMArgInFPReg,
 	LLVMArgVtypeInReg,
 	LLVMArgVtypeByVal,
-	LLVMArgVtypeRetAddr /* On on cinfo->ret */
+	LLVMArgVtypeRetAddr, /* On on cinfo->ret */
+	LLVMArgGSharedVt,
 } LLVMArgStorage;
 
 typedef struct {
@@ -1042,6 +1046,16 @@ typedef struct {
 	gboolean orig_ex_ctx_set;
 } MonoJitTlsData;
 
+/* TLS entries used by JITted code */
+typedef enum {
+	/* mono_thread_internal_current () */
+	TLS_KEY_THREAD = 0,
+	TLS_KEY_JIT_TLS = 1,
+	/* mono_domain_get () */
+	TLS_KEY_DOMAIN = 2,
+	TLS_KEY_LMF = 3
+} MonoJitTlsKey;
+
 /*
  * This structure is an extension of MonoLMF and contains extra information.
  */
@@ -1075,7 +1089,20 @@ typedef enum {
 	MONO_RGCTX_INFO_METHOD_GSHAREDVT_OUT_TRAMPOLINE_VIRT,
 	/* Same for calli, associated with a signature */
 	MONO_RGCTX_INFO_SIG_GSHAREDVT_OUT_TRAMPOLINE_CALLI,
-	MONO_RGCTX_INFO_CLASS_IS_REF
+	/*
+	 * 0 - vtype
+	 * 1 - ref
+	 * 2 - gsharedvt type
+	 */
+	MONO_RGCTX_INFO_CLASS_BOX_TYPE,
+	/* Resolves to a MonoGSharedVtMethodRuntimeInfo */
+	MONO_RGCTX_INFO_METHOD_GSHAREDVT_INFO,
+	MONO_RGCTX_INFO_LOCAL_OFFSET,
+	MONO_RGCTX_INFO_MEMCPY,
+	MONO_RGCTX_INFO_BZERO,
+	/* The address of Nullable<T>.Box () */
+	MONO_RGCTX_INFO_NULLABLE_CLASS_BOX,
+	MONO_RGCTX_INFO_NULLABLE_CLASS_UNBOX,
 } MonoRgctxInfoType;
 
 typedef struct _MonoRuntimeGenericContextInfoTemplate {
@@ -1104,6 +1131,23 @@ typedef struct {
 #define MONO_RGCTX_SLOT_IS_MRGCTX(s)	(((s) & 0x80000000) ? TRUE : FALSE)
 
 #define MONO_GSHAREDVT_DEL_INVOKE_VT_OFFSET -2
+
+typedef struct {
+	MonoMethod *method;
+	/* Array of MonoRuntimeGenericContextInfoTemplate* entries */
+	GPtrArray *entries;
+} MonoGSharedVtMethodInfo;
+
+/* This is used by gsharedvt methods to allocate locals and compute local offsets */
+typedef struct {
+	int locals_size;
+	/*
+	 * The results of resolving the entries in MOonGSharedVtMethodInfo->entries.
+	 * We use this instead of rgctx slots since these can be loaded using a load instead
+	 * of a call to an rgctx fetch trampoline.
+	 */
+	gpointer entries [MONO_ZERO_LEN_ARRAY];
+} MonoGSharedVtMethodRuntimeInfo;
 
 typedef enum {
 #define PATCH_INFO(a,b) MONO_PATCH_INFO_ ## a,
@@ -1169,6 +1213,7 @@ struct MonoJumpInfo {
 		MonoJumpInfoRgctxEntry *rgctx_entry;
 		MonoJumpInfoImtTramp *imt_tramp;
 		MonoJumpInfoGSharedVtCall *gsharedvt;
+		MonoGSharedVtMethodInfo *gsharedvt_method;
 		MonoMethodSignature *sig;
 	} data;
 };
@@ -1327,6 +1372,17 @@ typedef struct {
 
 	gboolean gsharedvt;
 
+	MonoGSharedVtMethodInfo *gsharedvt_info;
+
+	/* Points to the gsharedvt locals area at runtime */
+	MonoInst *gsharedvt_locals_var;
+
+	/* The localloc instruction used to initialize gsharedvt_locals_var */
+	MonoInst *gsharedvt_locals_var_ins;
+
+	/* Points to a MonoGSharedVtMethodRuntimeInfo at runtime */
+	MonoInst *gsharedvt_info_var;
+
 	/* For native-to-managed wrappers, the saved old domain */
 	MonoInst *orig_domain_var;
 
@@ -1475,7 +1531,7 @@ typedef struct {
 	GSList *headers_to_free;
 
 	/* Used by AOT */
-	guint32 got_offset, ex_info_offset, method_info_offset;
+	guint32 got_offset, ex_info_offset, method_info_offset, method_index;
 	/* Symbol used to refer to this method in generated assembly */
 	char *asm_symbol;
 	char *llvm_method_name;
@@ -1909,6 +1965,7 @@ MonoNativeTlsKey mono_get_jit_tls_key       (void) MONO_INTERNAL;
 gint32    mono_get_jit_tls_offset           (void) MONO_INTERNAL;
 gint32    mono_get_lmf_tls_offset           (void) MONO_INTERNAL;
 gint32    mono_get_lmf_addr_tls_offset      (void) MONO_INTERNAL;
+int       mini_get_tls_offset               (MonoJitTlsKey key) MONO_INTERNAL;
 MonoInst* mono_get_jit_tls_intrinsic        (MonoCompile *cfg) MONO_INTERNAL;
 MonoInst* mono_get_domain_intrinsic         (MonoCompile* cfg) MONO_INTERNAL;
 MonoInst* mono_get_thread_intrinsic         (MonoCompile* cfg) MONO_INTERNAL;
@@ -2015,6 +2072,7 @@ MonoMethod* mono_aot_get_array_helper_from_wrapper (MonoMethod *method) MONO_INT
 guint32  mono_aot_get_got_offset            (MonoJumpInfo *ji) MONO_LLVM_INTERNAL;
 char*    mono_aot_get_method_name           (MonoCompile *cfg) MONO_LLVM_INTERNAL;
 char*    mono_aot_get_plt_symbol            (MonoJumpInfoType type, gconstpointer data) MONO_LLVM_INTERNAL;
+int      mono_aot_get_method_index          (MonoMethod *method) MONO_LLVM_INTERNAL;
 MonoJumpInfo* mono_aot_patch_info_dup       (MonoJumpInfo* ji) MONO_LLVM_INTERNAL;
 void     mono_aot_set_make_unreadable       (gboolean unreadable) MONO_INTERNAL;
 gboolean mono_aot_is_pagefault              (void *ptr) MONO_INTERNAL;
@@ -2093,7 +2151,8 @@ gconstpointer     mono_get_trampoline_func (MonoTrampolineType tramp_type);
 gpointer          mini_get_vtable_trampoline (int slot_index) MONO_INTERNAL;
 char*             mono_get_generic_trampoline_name (MonoTrampolineType tramp_type) MONO_INTERNAL;
 char*             mono_get_rgctx_fetch_trampoline_name (int slot) MONO_INTERNAL;
-gpointer          mini_add_method_trampoline (MonoMethod *orig_method, MonoMethod *m, gpointer compiled_method, gboolean add_static_rgctx_tramp) MONO_INTERNAL;
+gpointer          mini_add_method_trampoline (MonoMethod *orig_method, MonoMethod *m, gpointer compiled_method, gboolean add_static_rgctx_tramp, gboolean add_unbox_tramp) MONO_INTERNAL;
+gboolean          mini_jit_info_is_gsharedvt (MonoJitInfo *ji) MONO_INTERNAL;
 
 gboolean          mono_running_on_valgrind (void) MONO_INTERNAL;
 void*             mono_global_codeman_reserve (int size) MONO_INTERNAL;
@@ -2452,6 +2511,9 @@ mono_method_lookup_rgctx (MonoVTable *class_vtable, MonoGenericInst *method_inst
 const char*
 mono_rgctx_info_type_to_str (MonoRgctxInfoType type) MONO_INTERNAL;
 
+MonoJumpInfoType
+mini_rgctx_info_type_to_patch_info_type (MonoRgctxInfoType info_type) MONO_INTERNAL;
+
 gboolean
 mono_method_needs_static_rgctx_invoke (MonoMethod *method, gboolean allow_type_vars) MONO_INTERNAL;
 
@@ -2535,7 +2597,6 @@ gboolean mini_is_gsharedvt_type (MonoCompile *cfg, MonoType *t) MONO_INTERNAL;
 gboolean mini_is_gsharedvt_signature (MonoCompile *cfg, MonoMethodSignature *sig) MONO_INTERNAL;
 gboolean mini_is_gsharedvt_type_gsctx (MonoGenericSharingContext *gsctx, MonoType *t) MONO_INTERNAL;
 gboolean mini_is_gsharedvt_variable_type (MonoCompile *cfg, MonoType *t) MONO_INTERNAL;
-MonoType* mini_get_gsharedvt_alloc_type_for_type (MonoCompile *cfg, MonoType *t); /* should be internal but it's used by llvm */
 gboolean mini_is_gsharedvt_sharable_method (MonoMethod *method) MONO_INTERNAL;
 gboolean mini_is_gsharedvt_variable_signature (MonoMethodSignature *sig) MONO_INTERNAL;
 gboolean mini_is_gsharedvt_sharable_inst (MonoGenericInst *inst) MONO_INTERNAL;
@@ -2672,5 +2733,27 @@ void SIG_HANDLER_SIGNATURE (mono_sigill_signal_handler)  MONO_INTERNAL;
 void SIG_HANDLER_SIGNATURE (mono_sigsegv_signal_handler) MONO_INTERNAL;
 void SIG_HANDLER_SIGNATURE (mono_sigint_signal_handler)  MONO_INTERNAL;
 gboolean SIG_HANDLER_SIGNATURE (mono_chain_signal) MONO_INTERNAL;
+
+#ifdef MONO_ARCH_HAVE_CREATE_DELEGATE_TRAMPOLINE
+#define ARCH_HAVE_DELEGATE_TRAMPOLINES 1
+#else
+#define ARCH_HAVE_DELEGATE_TRAMPOLINES 0
+#endif
+
+#ifdef MONO_ARCH_USE_OP_TAIL_CALL
+#define ARCH_USE_OP_TAIL_CALL 1
+#else
+#define ARCH_USE_OP_TAIL_CALL 0
+#endif
+
+#ifndef MONO_ARCH_HAVE_TLS_GET
+#define MONO_ARCH_HAVE_TLS_GET 0
+#endif
+
+#ifdef MONO_ARCH_HAVE_TLS_GET_REG
+#define ARCH_HAVE_TLS_GET_REG 1
+#else
+#define ARCH_HAVE_TLS_GET_REG 0
+#endif
 
 #endif /* __MONO_MINI_H__ */
